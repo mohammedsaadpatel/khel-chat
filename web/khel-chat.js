@@ -213,18 +213,26 @@ function openConv(key) {
   renderLists(); renderLog(); loadHistory(key);
 }
 
-async function joinCommunity(c) {
-  const key = keyOf('g', c.id);
+// One group per id, shared by everyone: the first person creates it, everyone else just joins.
+// (createGroup fails harmlessly if the group already exists.)
+async function openShared(groupId, name) {
+  const key = keyOf('g', groupId);
   if (!convos[key]) {
-    say(`Joining ${c.name}...`);
-    const cr = await GroupChannel.createGroup({ groupId: c.id, groupName: c.name, joinPermission: FREE }); // fails harmlessly if it already exists
-    const jr = await new GroupChannel(c.id).join();
-    console.log('community create', cr, 'join', jr);
-    if (!cr.isOk && !jr.isOk) return fail(`Could not join ${c.name}`, jr);
-    addConvo('g', c.id, c.name); say(`Joined ${c.name}.`);
+    say(`Joining ${name}...`);
+    const cr = await GroupChannel.createGroup({ groupId, groupName: name, joinPermission: FREE });
+    const jr = await new GroupChannel(groupId).join();
+    console.log('shared group create', cr, 'join', jr);
+    if (!cr.isOk && !jr.isOk) return fail(`Could not join ${name}`, jr);
+    addConvo('g', groupId, name); say(`Joined ${name}.`);
   }
   openConv(key);
 }
+
+const joinCommunity = (c) => openShared(c.id, c.name);
+
+// Same plan or trip id -> same group id for every user, so nobody ever gets a duplicate chat.
+const groupIdFor = (id) => 'chat-' + String(id).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+let pending = null; // chat the user asked for before they were signed in
 
 $('create').onclick = async () => {
   const name = $('gname').value.trim(); if (!name) return;
@@ -320,6 +328,7 @@ async function connectChat(user) {
     $('name').textContent = data.name || 'You';
     $('login').classList.add('hidden'); $('app').classList.remove('hidden');
     hideGate(); renderLists(); say('Connected.');
+    if (pending) { const p = pending; pending = null; openShared(p.groupId, p.name); }
   } catch (e) { say(`Sign-in failed: ${e.message}`, true); console.error(e); }
   finally { connecting = false; }
 }
@@ -341,8 +350,8 @@ const hideGate = (skipped = false) => {
 };
 $('login').onclick = signIn;
 $('gate-login').onclick = signIn;
-$('gate-skip').onclick = () => hideGate(true);
-$('gate').addEventListener('keydown', (e) => { if (e.key === 'Escape') hideGate(true); });
+$('gate-skip').onclick = () => { pending = null; hideGate(true); };
+$('gate').addEventListener('keydown', (e) => { if (e.key === 'Escape') { pending = null; hideGate(true); } });
 $('signout').onclick = async () => {
   try { await signOut(auth); } catch (e) { console.error(e); }
   location.reload();
@@ -369,6 +378,14 @@ window.khelChat = {
     $('panel').classList.add('hidden'); $('launcher').setAttribute('aria-expanded', 'false');
   },
   open: () => togglePanel(true),
+  // Called by every Squad Chat / Trip Chat button. Signed-in users land in the plan's shared group;
+  // others see the login screen first and are taken to the group right after signing in.
+  openForPlan({ id, title }) {
+    const groupId = groupIdFor(id), name = title || 'Squad chat';
+    if (connected) return openShared(groupId, name);
+    pending = { groupId, name };
+    if (!connecting) showGate();
+  },
 };
 
 })();
